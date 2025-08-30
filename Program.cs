@@ -35,6 +35,7 @@ internal class Program
         }
         catch (Exception ex)
         {
+            //log
             logger.Log($"❌ Error saving Excel file: {ex.Message}");
         }
 
