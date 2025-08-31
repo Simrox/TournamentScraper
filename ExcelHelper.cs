@@ -2,7 +2,9 @@ using OfficeOpenXml;
 
 namespace TournamentScraper
 {
-    internal class ExcelHelper : IExcelHelper
+    internal class ExcelHelper<TExcelObject, TId> : IExcelHelper<TExcelObject, TId>
+        where TExcelObject : class, IExcelObject<TId>, new()
+        where TId : notnull
     {
         private readonly FileInfo _excelFile;
         private readonly ExcelPackage _excelPackage;
@@ -16,10 +18,10 @@ namespace TournamentScraper
             _excelPackage = new ExcelPackage(_excelFile);
         }
 
-        public HashSet<string> GetExistingLinks()
+        public IReadOnlyDictionary<TId, TExcelObject> GetExistingRecords()
         {
             var worksheet = InitializeExcel(WorkSheetName);
-            return GetExistingLinks(worksheet);
+            return GetExistingRecords(worksheet);
         }
 
         /// <summary>
@@ -34,10 +36,10 @@ namespace TournamentScraper
         }
 
         /// <summary>
-        /// Appends the extracted tournament details as a new row in the Excel worksheet.
+        /// Appends the extracted excel record as a new row in the Excel worksheet.
         /// </summary>
         /// <param name="details">The TournamentDetails object to append.</param>
-        public void AppendToExcel(TournamentDetails details)
+        public void AppendToExcel(TExcelObject excelObject)
         {
             var worksheet = _excelPackage.Workbook.Worksheets.First();
 
@@ -48,11 +50,13 @@ namespace TournamentScraper
                 newRow++;
             }
 
-            worksheet.Cells[newRow, 1].Value = details.Url;
-            worksheet.Cells[newRow, 2].Value = details.Name;
-            worksheet.Cells[newRow, 3].Value = details.Date;
-            worksheet.Cells[newRow, 4].Value = details.Time;
-            worksheet.Cells[newRow, 5].Value = details.Place;
+            var properties = excelObject.GetExcelProperties();
+            int colIndex = 1;
+            foreach (var prop in properties)
+            {
+                worksheet.Cells[newRow, colIndex].Value = prop.Value.Value;
+                colIndex++;
+            }
         }
 
         /// <summary>
@@ -61,7 +65,7 @@ namespace TournamentScraper
         /// </summary>
         private ExcelWorksheet InitializeExcel(string worksheet)
         {
-            if (_excelFile.Exists)
+            if (File.Exists(_excelFile.FullName))
             {
                 try
                 {
@@ -82,32 +86,39 @@ namespace TournamentScraper
         }
 
         /// <summary>
-        /// Read existing links from the Excel file to populate _existingLinks
-        /// This prevents re-processing tournaments already recorded.
+        /// Read all records from the Excel file into a list of TExcelObject.
         /// </summary>
         /// <param name="worksheet"></param>
-        private static HashSet<string> GetExistingLinks(ExcelWorksheet worksheet)
+        private static IReadOnlyDictionary<TId, TExcelObject> GetExistingRecords(
+            ExcelWorksheet worksheet
+        )
         {
-            var existingLinks = new HashSet<string>();
+            var existingRecords = new Dictionary<TId, TExcelObject>();
+            var excelObject = new TExcelObject();
             if (worksheet.Dimension != null && worksheet.Dimension.Rows > 1)
             {
                 for (int row = 2; row <= worksheet.Dimension.Rows; row++)
                 {
-                    string link = worksheet.Cells[row, 1].Text;
-                    if (!string.IsNullOrEmpty(link))
+                    var rowKeyValuePairs = GetRowKeyValuePairs(worksheet, row);
+                    if (
+                        rowKeyValuePairs.Count == 0
+                        || rowKeyValuePairs.Values.All(i => string.IsNullOrEmpty(i.Value))
+                    )
                     {
-                        existingLinks.Add(link);
+                        continue;
                     }
+                    excelObject.SetProperties(rowKeyValuePairs);
+                    existingRecords.TryAdd(excelObject.Id, excelObject);
                 }
             }
-            return existingLinks;
+            return existingRecords;
         }
 
         /// <summary>
         /// Create a new Excel package and worksheet if the file doesn't exist
         /// </summary>
         /// <param name="excelFile"></param>
-        private ExcelWorksheet CreateExcel(ExcelPackage excelPackage)
+        private static ExcelWorksheet CreateExcel(ExcelPackage excelPackage)
         {
             var worksheet = excelPackage.Workbook.Worksheets.Add(WorkSheetName);
             AddExcelHeaders(worksheet);
@@ -119,12 +130,65 @@ namespace TournamentScraper
         /// </summary>
         private static void AddExcelHeaders(ExcelWorksheet excelWorksheet)
         {
-            excelWorksheet.Cells[1, 1].Value = "URL";
-            excelWorksheet.Cells[1, 2].Value = "Tournament Name";
-            excelWorksheet.Cells[1, 3].Value = "Date";
-            excelWorksheet.Cells[1, 4].Value = "Time";
-            excelWorksheet.Cells[1, 5].Value = "Place";
-            excelWorksheet.Cells[1, 1, 1, 5].Style.Font.Bold = true;
+            var excelObject = new TExcelObject();
+            var properties = excelObject
+                .GetExcelProperties()
+                .OrderBy(p => p.Value.Order)
+                .Select(p => p.Value.Header)
+                .ToList();
+            var index = 1;
+            foreach (var prop in properties)
+            {
+                excelWorksheet.Cells[1, index].Value = prop;
+                excelWorksheet.Cells[1, index].Style.Font.Bold = true;
+                index++;
+            }
+        }
+
+        private static IReadOnlyDictionary<string, ExcelProperty> GetRowKeyValuePairs(
+            ExcelWorksheet worksheet,
+            int rowIndex
+        )
+        {
+            var result = new Dictionary<string, ExcelProperty>();
+            int colCount = worksheet.Dimension.End.Column;
+            var targetProperties = new TExcelObject().GetExcelProperties().Values;
+
+            for (int col = 1; col <= colCount; col++)
+            {
+                var header = worksheet.Cells[1, col].Text;
+                var value = worksheet.Cells[rowIndex, col].Text;
+
+                if (string.IsNullOrEmpty(value))
+                    continue;
+
+                var targetProperty = targetProperties.FirstOrDefault(p =>
+                    p.Header.Equals(header, StringComparison.OrdinalIgnoreCase)
+                );
+
+                targetProperty ??= targetProperties.FirstOrDefault(p =>
+                    p.PropertyName.Equals(header, StringComparison.OrdinalIgnoreCase)
+                );
+
+                targetProperty ??= targetProperties.FirstOrDefault(p => p.Order == col);
+
+                if (targetProperty is null)
+                    continue;
+
+                result.Add(
+                    targetProperty.PropertyName,
+                    new ExcelProperty
+                    {
+                        Header = header,
+                        Order = col,
+                        PropertyName = targetProperty.PropertyName,
+                        PropertyType = targetProperty.PropertyType,
+                        Value = value
+                    }
+                );
+            }
+
+            return result;
         }
     }
 }

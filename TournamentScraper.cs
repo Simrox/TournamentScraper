@@ -1,3 +1,4 @@
+using System.Net;
 using HtmlAgilityPack;
 
 namespace TournamentScraper
@@ -46,34 +47,32 @@ namespace TournamentScraper
                 yield break;
             }
 
+            var alreadyCheckedLinks = new HashSet<string>();
             foreach (var linkNode in tournamentLinkNodes)
             {
-                var tournament = TryAddNewTournament(existingLinks, linkNode, baseUrl);
-                if (tournament is null)
+                string relativeHref = linkNode.GetAttributeValue("href", string.Empty);
+                string fullUrl = baseUrl + relativeHref;
+                if (string.IsNullOrEmpty(relativeHref) || alreadyCheckedLinks.Contains(fullUrl))
                     continue;
-                yield return tournament;
+
+                alreadyCheckedLinks.Add(fullUrl);
+
+                string tournamentName = linkNode.InnerText.Trim(); // The link text usually contains the tournament name
+
+                if (existingLinks.Contains(fullUrl))
+                {
+                    _logger.Log($"⏩ Skipping existing tournament: {tournamentName} ({fullUrl})");
+                    continue;
+                }
+
+                _logger.Log($"✨ Processing new tournament: {tournamentName} ({fullUrl})");
+
+                var tournamentDetails = ProcessTournamentPage(fullUrl, tournamentName);
+                if (tournamentDetails is null)
+                    continue;
+
+                yield return tournamentDetails;
             }
-        }
-
-        private TournamentDetails? TryAddNewTournament(
-            IReadOnlySet<string> existingLinks,
-            HtmlNode linkNode,
-            string baseUrl
-        )
-        {
-            string relativeHref = linkNode.GetAttributeValue("href", string.Empty);
-            string fullUrl = baseUrl + relativeHref;
-            string tournamentName = linkNode.InnerText.Trim(); // The link text usually contains the tournament name
-
-            if (existingLinks.Contains(fullUrl))
-            {
-                _logger.Log($"⏩ Skipping existing tournament: {tournamentName} ({fullUrl})");
-                return null;
-            }
-
-            _logger.Log($"✨ Processing new tournament: {tournamentName} ({fullUrl})");
-
-            return ProcessTournamentPage(fullUrl, tournamentName);
         }
 
         /// <summary>
@@ -161,7 +160,18 @@ namespace TournamentScraper
                 place = cityMatch.Groups[1].Value.Trim();
             }
 
-            return new TournamentDetails(tournamentUrl, tournamentName, date, time, place);
+            return new TournamentDetails(
+                new Uri(tournamentUrl),
+                WebUtility.HtmlDecode(tournamentName),
+                DateOnly.FromDateTime(DateTime.Now),
+                DateOnly.FromDateTime(DateTime.Now),
+                5,
+                true,
+                true,
+                false,
+                WebUtility.HtmlDecode($"{time}, {place}"),
+                WebUtility.HtmlDecode(time)
+            );
         }
 
         public void Dispose()

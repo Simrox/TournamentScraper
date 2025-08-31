@@ -1,8 +1,10 @@
 namespace TournamentScraper
 {
-    public interface IExcelHelper : IDisposable
+    public interface IExcelHelper<TExcelObject, TId> : IDisposable
+        where TExcelObject : class, IExcelObject<TId>, new()
+        where TId : notnull
     {
-        HashSet<string> GetExistingLinks();
-        void AppendToExcel(TournamentDetails tournamentDetails);
+        IReadOnlyDictionary<TId, TExcelObject> GetExistingRecords();
+        void AppendToExcel(TExcelObject excelObject);
     }
 }

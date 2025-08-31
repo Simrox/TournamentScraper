@@ -11,17 +11,24 @@ internal class Program
     /// </summary>
     public static void Main(string[] args)
     {
+        if (File.Exists(ExcelFilePath))
+        {
+            // File.Delete(ExcelFilePath);
+        }
         var logger = new ConsoleLogger();
-        var excelHelper = new ExcelHelper(ExcelFilePath);
+        var excelHelper = new ExcelHelper<TournamentDetails, Uri>(ExcelFilePath);
         var scraper = new ScraperHelper(logger);
 
-        var existingLinks = excelHelper.GetExistingLinks();
+        var existingLinks = excelHelper
+            .GetExistingRecords()
+            .Select(i => i.Key.AbsoluteUri)
+            .ToHashSet();
         var newTournamentsCount = 0;
         foreach (var tournament in scraper.ScrapeTournaments(WebsiteUrl, BaseUrl, existingLinks))
         {
             excelHelper.AppendToExcel(tournament);
             logger.Log(
-                $"✅ Added to Excel: {tournament.Name} ({tournament.Date}, {tournament.Place})"
+                $"✅ Added to Excel: {tournament.Name} ({tournament.StartDate}, {tournament.EndDate})"
             );
             newTournamentsCount++;
         }
